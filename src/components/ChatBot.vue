@@ -1,432 +1,402 @@
 <template>
-  <div class="chat-wrapper" :class="{ minimized: isMinimized }">
-    <!-- 最小化状态：仅显示 AI 头像 -->
-    <div v-if="isMinimized" class="minimized-avatar" @click="toggleMinimize">
-      <el-avatar
-          :size="50"
-          :style="{ backgroundColor: '#67C23A', cursor: 'pointer' }"
-          icon="ChatLineRound"
-      />
-      <!-- 可选：新消息红点 -->
-      <el-badge
-          v-if="hasNewMessage"
-          is-dot
-          class="new-message-badge"
-      />
+  <div class="assistant-container">
+    <!-- 顶部标题 -->
+    <div class="header">
+      <h1>智慧小助手</h1>
+      <p class="subtitle">请上传Excel文件（仅表头），然后描述需要填充的内容</p>
     </div>
 
-    <!-- 正常聊天窗口 -->
-    <div v-else class="chat-container">
-      <!-- 右上角收缩按钮 -->
-      <div class="header">
-        <span class="title">🤖 表智助手</span>
-        <el-button
-            type="text"
-            size="small"
-            @click="toggleMinimize"
-            style="margin-left: auto"
-        >
-          <el-icon><Fold /></el-icon>
-        </el-button>
-      </div>
+    <!-- 对话框区域 -->
+    <div class="chat-container">
+      <!-- 对话消息区域 -->
+      <div class="chat-messages" ref="chatMessages">
+        <div v-for="(message, index) in messages" :key="index" class="chat-message" :class="message.role">
+          <div v-if="message.role === 'assistant'" class="message-content">
+            <div class="message-header">
+              <span class="message-icon">🤖</span>
+              <span class="message-time">{{ formatTime(message.time) }}</span>
+            </div>
+            <div class="message-text">{{ message.content }}</div>
 
-      <!-- 上传区域 -->
-      <div class="upload-area">
-        <el-upload
-            :auto-upload="false"
-            :show-file-list="false"
-            :on-change="handleExcelUpload"
-            accept=".xlsx,.xls"
-        >
-          <el-button type="primary" size="small" :icon="Upload">
-            上传 Excel 表头
-          </el-button>
-        </el-upload>
-        <el-tag v-if="tableHeaders.length > 0" size="small" type="success" style="margin-left: 12px">
-          已加载 {{ tableHeaders.length }} 个字段
-        </el-tag>
-        <el-tag v-else size="small" type="info" style="margin-left: 12px">未上传表格</el-tag>
-      </div>
-
-      <!-- 聊天区域 -->
-      <el-scrollbar ref="scrollbarRef" class="chat-area">
-        <div v-for="msg in messages" :key="msg.id" class="message-row">
-          <el-row :type="msg.sender === 'user' ? 'flex' : undefined" :justify="msg.sender === 'user' ? 'end' : 'start'">
-            <el-col :span="2" style="display: flex; align-items: center; justify-content: center;">
-              <el-avatar
-                  :icon="msg.sender === 'user' ? User : ChatLineRound"
-                  size="small"
-                  :style="{ backgroundColor: msg.sender === 'user' ? '#409EFF' : '#67C23A' }"
-              />
-            </el-col>
-            <el-col :span="20">
-              <div
-                  class="bubble"
-                  :class="{
-                  'user-bubble': msg.sender === 'user',
-                  'ai-bubble': msg.sender === 'ai'
-                }"
+            <!-- 上传区域（当需要上传文件时显示） -->
+            <div v-if="message.showUpload" class="upload-area">
+              <el-upload
+                  class="upload-demo"
+                  :http-request="handleUpload"
+                  :show-file-list="false"
+                  accept=".xlsx, .xls"
+                  :before-upload="beforeUpload"
+                  :disabled="isProcessing"
               >
-                <span v-if="msg.isTyping">{{ displayedText }}</span>
-                <span v-else>{{ msg.content }}</span>
+                <el-button type="primary" :disabled="isProcessing">
+                  {{ isProcessing ? '处理中...' : '上传Excel文件（仅表头）' }}
+                </el-button>
+              </el-upload>
+              <p class="upload-tip">请上传包含表头的Excel文件</p>
+            </div>
+
+            <!-- 数据预览（当有生成内容时显示） -->
+            <div v-if="message.data && message.data.length > 0" class="data-preview">
+              <div class="data-header">生成的数据预览（前3条）：</div>
+              <div class="data-table">
+                <table>
+                  <thead>
+                  <tr>
+                    <th v-for="(header, idx) in headers" :key="idx">{{ header }}</th>
+                  </tr>
+                  </thead>
+                  <tbody>
+                  <tr v-for="(row, idx) in message.data.slice(0, 3)" :key="idx">
+                    <td v-for="(cell, cellIdx) in row" :key="cellIdx">{{ cell }}</td>
+                  </tr>
+                  </tbody>
+                </table>
+                <div v-if="message.data.length > 3" class="data-footer">
+                  ... 共 {{ message.data.length }} 条数据
+                </div>
               </div>
-            </el-col>
-          </el-row>
+            </div>
+          </div>
+
+          <div v-else-if="message.role === 'user'" class="message-content">
+            <div class="message-header">
+              <span class="message-icon">👤</span>
+              <span class="message-time">{{ formatTime(message.time) }}</span>
+            </div>
+            <div class="message-text">{{ message.content }}</div>
+          </div>
         </div>
-      </el-scrollbar>
+      </div>
 
       <!-- 输入区域 -->
-      <div class="input-area">
+      <div class="chat-input">
         <el-input
-            v-model="inputText"
-            placeholder="例如：表格有哪些字段？第3列叫什么？"
-            @keyup.enter="sendMessage"
-            clearable
-            :disabled="sending"
-        >
-          <template #prefix>
-            <el-icon><ChatLineSquare /></el-icon>
-          </template>
-        </el-input>
-        <el-button type="primary" @click="sendMessage" :loading="sending" :icon="Promotion">
-          发送
-        </el-button>
+            v-model="userInput"
+            type="textarea"
+            :rows="3"
+            placeholder="描述需要填充的内容，例如：生成5条销售数据，按部门合并，部门名称相同则合并行"
+            :disabled="isProcessing"
+            @keyup.enter="handleSend"
+        />
+        <div class="input-actions">
+          <el-button
+              type="primary"
+              @click="handleSend"
+              :disabled="!userInput.trim() || isProcessing"
+          >
+            {{ isProcessing ? '生成中...' : '发送' }}
+          </el-button>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, nextTick, onBeforeUnmount, watch } from 'vue'
-import * as XLSX from 'xlsx'
-import {
-  Upload,
-  User,
-  ChatLineSquare,
-  ChatLineRound,
-  Promotion,
-  Fold
-} from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ref, onMounted, nextTick, computed } from 'vue';
+import * as XLSX from 'xlsx';
+import { ElMessage } from 'element-plus';
+import {openai} from "@/openAI/qiWen.js";
 
-// =============== 响应式状态 ===============
-const isMinimized = ref(false)
-const inputText = ref('')
-const sending = ref(false)
-const tableHeaders = ref([])
-const typingInterval = ref(null)
-const fullResponse = ref('')
-const scrollbarRef = ref(null)
-const hasNewMessage = ref(false) // 用于最小化时显示红点
+// ⚠️ 重要：以下API Key仅用于演示，实际项目必须使用后端代理！
+// 请勿在生产环境中使用此API Key，否则会导致费用被刷！
+// const DASHSCOPE_API_KEY = 'sk-4b8f6b8e94514f50b8e9da6b55aa921f'; // 请替换为您的实际API Key
 
-const messages = reactive([
-  {
-    id: 1,
-    sender: 'ai',
-    content: '👋 你好！我是智能表格助手“表智”。请先上传 Excel 文件，我将自动读取表头并回答字段相关问题~',
-    isTyping: false
-  }
-])
+// 状态管理
+const messages = ref([]);
+const userInput = ref('');
+const isProcessing = ref(false);
+const headers = ref([]);
+const file = ref(null);
+const chatMessages = ref(null);
 
-// 监听新消息（用于红点提示）
-watch(messages, () => {
-  const lastMsg = messages[messages.length - 1]
-  if (lastMsg && lastMsg.sender === 'ai' && !isMinimized.value) {
-    hasNewMessage.value = false
-  }
-})
+// 初始化欢迎消息
+onMounted(() => {
+  addMessage('assistant', '你好！我是智慧小助手。请上传一个包含表头的Excel文件，然后描述需要填充的内容，我可以生成一个Excel。例如：生成5条销售数据，按部门合并，部门名称相同则合并行');
+});
 
-// =============== 计算属性 ===============
-const displayedText = computed(() => fullResponse.value)
+// 添加消息到对话
+const addMessage = (role, content, data = null, showUpload = false) => {
+  messages.value.push({
+    role,
+    content,
+    data,
+    showUpload,
+    time: new Date().getTime()
+  });
 
-// =============== 方法 ===============
-const toggleMinimize = () => {
-  isMinimized.value = !isMinimized.value
-  if (!isMinimized.value) {
-    hasNewMessage.value = false // 展开时清除红点
-    nextTick(() => scrollToBottom())
-  }
-}
-
-const handleExcelUpload = (file) => {
-  const reader = new FileReader()
-  reader.onload = (e) => {
-    try {
-      const data = new Uint8Array(e.target.result)
-      const workbook = XLSX.read(data, { type: 'array' })
-
-      if (workbook.SheetNames.length === 0) {
-        ElMessage.warning('Excel 文件不包含有效工作表')
-        return
-      }
-
-      const firstSheet = workbook.Sheets[workbook.SheetNames[0]]
-      const json = XLSX.utils.sheet_to_json(firstSheet, { header: 1 })
-
-      if (json.length === 0) {
-        ElMessage.error('Excel 文件为空')
-        return
-      }
-
-      tableHeaders.value = json[0]
-          .map(h => String(h || '').trim())
-          .filter(h => h !== '')
-
-      messages.push({
-        id: Date.now(),
-        sender: 'ai',
-        content: `✅ 已成功解析 Excel 表头！共识别 ${tableHeaders.value.length} 个有效字段：\n` +
-            tableHeaders.value.map((h, i) => `${i + 1}. ${h}`).join('\n'),
-        isTyping: false
-      })
-
-      ElMessage.success(`成功加载 ${tableHeaders.value.length} 个字段`)
-      scrollToBottom()
-    } catch (err) {
-      console.error('Excel 解析错误:', err)
-      ElMessage.error('解析失败：请确认是标准 Excel 文件（.xlsx/.xls）')
-    }
-  }
-  reader.readAsArrayBuffer(file.raw)
-}
-
-const getAIResponse = (userMsg) => {
-  const lower = userMsg.toLowerCase().trim()
-  const headers = tableHeaders.value
-
-  if (/表头|字段|列名|有哪些列|包含什么/.test(lower)) {
-    if (headers.length === 0) {
-      return '⚠️ 请先点击上方按钮上传 Excel 文件，我才能读取表头信息哦~'
-    }
-    return `📋 当前表格包含 ${headers.length} 个字段：\n` +
-        headers.map((h, i) => `• 第${i + 1}列: ${h}`).join('\n')
-  }
-
-  if (/第(\d+)列/.test(lower)) {
-    if (headers.length === 0) return '⚠️ 请先上传 Excel 文件'
-    const match = lower.match(/第(\d+)列/)
-    if (match) {
-      const colIndex = parseInt(match[1], 10) - 1
-      if (colIndex >= 0 && colIndex < headers.length) {
-        return `🔍 第 ${colIndex + 1} 列的字段名是：**${headers[colIndex]}**`
-      } else {
-        return `❌ 表格只有 ${headers.length} 列，不存在第 ${colIndex + 1} 列`
-      }
-    }
-  }
-
-  if (/最后一列|最后.*字段/.test(lower)) {
-    if (headers.length === 0) return '⚠️ 请先上传 Excel 文件'
-    return `🔚 最后一列（第${headers.length}列）的字段名是：**${headers[headers.length - 1]}**`
-  }
-
-  if (/包含.*姓名|有.*邮箱|有没有.*电话/.test(lower)) {
-    if (headers.length === 0) return '⚠️ 请先上传 Excel 文件'
-    const keywordMap = {
-      '姓名': /姓名|名字|名称/,
-      '邮箱': /邮箱|邮件|email/,
-      '电话': /电话|手机|联系方式|手机号/
-    }
-    for (const [key, regex] of Object.entries(keywordMap)) {
-      if (lower.includes(key)) {
-        const found = headers.find(h => regex.test(h.toLowerCase()))
-        return found
-            ? `✅ 找到包含"${key}"的字段：**${found}**`
-            : `❌ 未找到包含"${key}"的字段`
-      }
-    }
-  }
-
-  if (/^你好|^hello/i.test(lower)) return '😊 你好！我是表格小助手，请上传 Excel 文件开始对话~'
-  if (/名字|叫什么/.test(lower)) return '🤖 我叫“表智”，专注帮你理解表格结构！'
-  if (/谢谢|感谢/.test(lower)) return '✨ 不客气！随时为你效劳~'
-  if (/再见|拜拜/.test(lower)) return '👋 再见！需要时随时回来找我~'
-
-  return headers.length > 0
-      ? `💡 你可以问我：\n• “表格有哪些字段？”\n• “第3列叫什么？”\n• “包含姓名的字段是哪个？”`
-      : `📎 请先上传 Excel 文件，我才能帮你分析表格结构哦！`
-}
-
-const sendMessage = () => {
-  if (!inputText.value.trim() || sending.value) return
-
-  messages.push({
-    id: Date.now(),
-    sender: 'user',
-    content: inputText.value,
-    isTyping: false
-  })
-
-  const userInput = inputText.value
-  inputText.value = ''
-  sending.value = true
-
-  setTimeout(() => {
-    const aiReply = getAIResponse(userInput)
-    const aiMsg = {
-      id: Date.now() + 1,
-      sender: 'ai',
-      content: '',
-      isTyping: true
-    }
-    messages.push(aiMsg)
-
-    // 如果当前最小化，标记有新消息
-    if (isMinimized.value) {
-      hasNewMessage.value = true
-    }
-
-    simulateTyping(aiReply, aiMsg)
-  }, 400)
-}
-
-const simulateTyping = (fullText, msgObj) => {
-  let index = 0
-  fullResponse.value = ''
-  if (typingInterval.value) clearInterval(typingInterval.value)
-
-  typingInterval.value = setInterval(() => {
-    if (index < fullText.length) {
-      fullResponse.value += fullText[index]
-      index++
-    } else {
-      clearInterval(typingInterval.value)
-      msgObj.content = fullText
-      msgObj.isTyping = false
-      fullResponse.value = ''
-      scrollToBottom()
-    }
-  }, 25)
-}
-
-const scrollToBottom = () => {
+  // 滚动到最新消息
   nextTick(() => {
-    const scrollbar = scrollbarRef.value
-    if (scrollbar?.wrapRef) {
-      scrollbar.wrapRef.scrollTop = scrollbar.wrapRef.scrollHeight
+    if (chatMessages.value) {
+      chatMessages.value.scrollTop = chatMessages.value.scrollHeight;
     }
-  })
-}
+  });
+};
 
-onBeforeUnmount(() => {
-  if (typingInterval.value) clearInterval(typingInterval.value)
-})
+// 检查文件类型
+const beforeUpload = (file) => {
+  const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
+  if (!isExcel) {
+    ElMessage.error('仅支持上传Excel文件（.xlsx/.xls）');
+    return false;
+  }
+  return true;
+};
+
+// 处理上传
+const handleUpload = async ({ file: uploadedFile }) => {
+  file.value = uploadedFile;
+  try {
+    // 读取Excel表头
+    const data = new FileReader();
+    data.onload = (e) => {
+      const workbook = XLSX.read(e.target.result, { type: 'array' });
+      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+
+      // 提取表头（第一行）
+      const headerRow = XLSX.utils.sheet_to_json(firstSheet, { header: 1 })[0];
+      headers.value = headerRow;
+
+      if (headers.value.length === 0) {
+        ElMessage.error('Excel文件必须包含表头');
+        return;
+      }
+
+      // 添加成功提示
+      addMessage('assistant', `已成功提取表头：${headers.value.join(' | ')}。请描述需要填充的内容`);
+
+      // 移除上传提示（因为已经上传成功）
+      const lastMessage = messages.value[messages.value.length - 1];
+      if (lastMessage.showUpload) {
+        messages.value.pop();
+        addMessage('assistant', `已成功提取表头：${headers.value.join(' | ')}。请描述需要填充的内容`);
+      }
+
+      ElMessage.success('表头提取成功！');
+    };
+    data.readAsArrayBuffer(uploadedFile);
+  } catch (error) {
+    ElMessage.error('文件解析失败: ' + error.message);
+  }
+};
+
+// 发送消息
+const handleSend = async () => {
+  if (!userInput.value.trim() || isProcessing.value) return;
+
+  // 添加用户消息
+  const userContent = userInput.value.trim();
+  addMessage('user', userContent);
+  userInput.value = '';
+
+  isProcessing.value = true;
+
+  try {
+    // //检查是否已上传Excel
+    // if (headers.value.length === 0) {
+    //   // 未上传Excel，提示上传
+    //   addMessage('assistant', '请先上传Excel文件', null, true);
+    //   return;
+    // }
+
+    // ⚠️ 前端直接调用大模型API（仅用于演示，不安全！）
+    let assistantMessages = messages.value.filter(msg => msg.role === 'assistant')
+    const response = await openai.responses.create({
+      model: "qwen3.5-plus",
+      input: userContent,
+      previous_response_id: assistantMessages.length > 1 ? assistantMessages[assistantMessages.length - 1].data.id : null,
+    });
+
+    // 添加助手回复
+    addMessage('assistant', `${response.output_text}`, response);
+
+    // ElMessage.success('内容生成成功！');
+  } catch (error) {
+    addMessage('assistant', `生成失败: ${error.message}`);
+  } finally {
+    isProcessing.value = false;
+  }
+};
+
+// 格式化时间
+const formatTime = (timestamp) => {
+  const date = new Date(timestamp);
+  return `${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}`;
+};
 </script>
 
 <style scoped>
-/* 整体容器 */
-.chat-wrapper {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  z-index: 1000;
-  transition: all 0.3s ease;
-}
-
-/* 最小化状态 */
-.chat-wrapper.minimized {
-  width: 60px;
-  height: 60px;
-  border-radius: 50%;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-}
-
-.minimized-avatar {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: white;
-  border-radius: 50%;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-}
-
-.new-message-badge {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-}
-
-/* 正常聊天窗口 */
-.chat-container {
-  width: 380px;
-  max-width: 95vw;
-  height: 620px;
-  display: flex;
-  flex-direction: column;
-  background: white;
-  border-radius: 16px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.15);
-  overflow: hidden;
+.assistant-container {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 20px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 
 .header {
-  display: flex;
-  align-items: center;
-  padding: 12px 16px;
-  background-color: #f8f9fc;
-  border-bottom: 1px solid #eee;
-  font-weight: 600;
-  color: #333;
+  text-align: center;
+  margin-bottom: 25px;
 }
 
-.upload-area {
-  padding: 12px 16px;
-  border-bottom: 1px solid #f0f0f0;
-  display: flex;
-  align-items: center;
-  background-color: #fafcff;
+.header h1 {
+  color: #1890ff;
+  margin-bottom: 8px;
+  font-size: 28px;
 }
 
-.chat-area {
+.subtitle {
+  color: #595959;
+  font-size: 14px;
+  max-width: 600px;
+  margin: 0 auto;
+  line-height: 1.5;
+}
+
+.chat-container {
+  background: #f9fafb;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+  height: 600px;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-messages {
   flex: 1;
-  padding: 16px;
   overflow-y: auto;
-  background-color: #fafcff;
+  padding: 20px;
+  background: #fff;
+  border-bottom: 1px solid #e8e8e8;
 }
 
-.message-row {
-  margin-bottom: 16px;
-}
-
-.bubble {
-  padding: 12px 16px;
-  border-radius: 18px;
-  word-break: break-word;
+.chat-message {
+  margin-bottom: 20px;
   max-width: 85%;
   line-height: 1.5;
+}
+
+.chat-message.user {
+  margin-left: auto;
+  background: #1890ff;
+  color: white;
+  border-radius: 18px 18px 0 18px;
+}
+
+.chat-message.assistant {
+  margin-right: auto;
+  background: #f5f7fa;
+  border-radius: 18px 18px 18px 0;
+}
+
+.message-content {
+  padding: 12px 15px;
+}
+
+.message-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #8c8c8c;
+}
+
+.message-icon {
+  margin-right: 5px;
   font-size: 14px;
 }
 
-.user-bubble {
-  background: linear-gradient(135deg, #409eff, #5dade2);
-  color: white;
-  text-align: right;
-  border-bottom-right-radius: 6px;
+.message-text {
+  font-size: 14px;
+  line-height: 1.5;
 }
 
-.ai-bubble {
-  background-color: #ffffff;
-  color: #333;
-  border: 1px solid #ebeef5;
-  border-bottom-left-radius: 6px;
+.upload-area {
+  margin-top: 10px;
+  text-align: center;
 }
 
-.input-area {
-  display: flex;
+.upload-tip {
+  color: #666;
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.data-preview {
+  margin-top: 15px;
+  background: #f0f9ff;
+  border-radius: 8px;
   padding: 12px;
-  border-top: 1px solid #eee;
-  gap: 10px;
-  background-color: #fff;
+  font-size: 13px;
 }
 
-.input-area .el-input {
-  flex: 1;
+.data-header {
+  font-weight: bold;
+  color: #1890ff;
+  margin-bottom: 8px;
 }
 
-.input-area .el-button {
-  padding: 0 20px;
+.data-table {
+  overflow-x: auto;
+  border-radius: 6px;
+  border: 1px solid #e8e8e8;
+  margin-top: 8px;
+}
+
+.data-table table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 400px;
+}
+
+.data-table th, .data-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid #e8e8e8;
+}
+
+.data-table th {
+  background: #f0f9ff;
+  font-weight: 600;
+}
+
+.data-footer {
+  color: #8c8c8c;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.chat-input {
+  padding: 15px;
+  background: #fff;
+  border-top: 1px solid #e8e8e8;
+}
+
+.input-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+/* 滚动条样式 */
+.chat-messages::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chat-messages::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+.chat-messages::-webkit-scrollbar-thumb {
+  background: #b4b4b4;
+  border-radius: 3px;
+}
+
+.chat-messages::-webkit-scrollbar-thumb:hover {
+  background: #a0a0a0;
 }
 </style>
